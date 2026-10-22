@@ -2,7 +2,7 @@
 //
 // Registers two model tools:
 //   blender_execute — run Python/bpy in the running Blender (protocol 2 job API)
-//   blender_bridge  — health / list / status / wait / cancel
+//   blender_bridge  — health / list / screenshot / status / wait / cancel
 //
 // Protocol logic lives entirely in the shared public client
 // (../../plugins/blender-bridge/skills/blender-bridge/scripts/blender-bridge.mjs),
@@ -28,6 +28,7 @@ import {
   submit,
   wait,
   discover,
+  screenshotCode,
 } from '../../plugins/blender-bridge/skills/blender-bridge/scripts/blender-bridge.mjs';
 
 export const name = 'tool-blender-bridge';
@@ -45,7 +46,7 @@ const MAX_INTERVAL_SECONDS = 10;
 const MAX_TRACKED_JOBS = 128;
 const VALID_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'expired', 'interrupted']);
-const BRIDGE_ACTIONS = ['health', 'list', 'status', 'wait', 'cancel'];
+const BRIDGE_ACTIONS = ['health', 'list', 'screenshot', 'status', 'wait', 'cancel'];
 
 const BASE_PROPERTIES = {
   ok: { type: 'boolean', description: 'Whether the bridge interaction itself succeeded.' },
@@ -554,6 +555,26 @@ export function blenderExecuteTool(config = {}, track = new Map()) {
   };
 }
 
+function renderScreenshot(value) {
+  if (!value.ok) return renderValue('blender_bridge screenshot', value);
+  let meta = {};
+  try {
+    meta = JSON.parse(value.result || '{}');
+  } catch {
+    meta = {};
+  }
+  const lines = [
+    ['blender_bridge screenshot:', value.outcome, value.id ? `job ${value.id}` : ''].filter(Boolean).join(' '),
+    meta.path ? `file: ${meta.path}` : '',
+    Number.isInteger(meta.width) && Number.isInteger(meta.height) ? `size: ${meta.width}x${meta.height}` : '',
+    meta.validated === true ? 'validated: window pixels are not opaque black' : '',
+    meta.restored_minimized ? 'note: Blender was minimized; restored for capture, then minimized again.' : '',
+    value.error ? `error: ${value.error}` : '',
+    value.hint ? `note: ${value.hint}` : '',
+  ].filter(Boolean);
+  return text(truncate(lines.join('\n')));
+}
+
 /** `blender_bridge` — management verbs for one executor. */
 export function blenderBridgeTool(config = {}, track = new Map()) {
   const configBase = typeof config.base === 'string' ? config.base : '';
@@ -561,20 +582,26 @@ export function blenderBridgeTool(config = {}, track = new Map()) {
     name: 'blender_bridge',
     description:
       'Manage the Blender Bridge and its jobs. Actions: `list` (all Blender instances answering discovery; run it first ' +
-      'when several are open), `health` (bridge/protocol version, Blender version, file, pid), `status` (one job by ID, ' +
-      'including progress/steps/result/logs), `wait` (poll one job until terminal or the budget ends), `cancel` (queued ' +
-      'jobs stop immediately; a running generator stops between yielded steps; a fully synchronous script cannot be ' +
-      'interrupted). Without an explicit `base`, `health` only proceeds when exactly one instance answers, while ' +
-      'status/wait/cancel reuse the base recorded for that job ID so they never query a different Blender. A wait ' +
-      'timeout is not a failure or cancellation: keep the ID and query it again. Never resubmit a write under a new ID ' +
-      'while the old outcome is unknown.',
+      'when several are open), `health` (bridge/protocol version, Blender version, file, pid), `screenshot` (capture the ' +
+      'real Blender window to a new absolute .png; requires bridge add-on >= 0.3.0), `status` (one job by ID, including ' +
+      'progress/steps/result/logs), `wait` (poll one job until terminal or the budget ends), `cancel` (queued jobs stop ' +
+      'immediately; a running generator stops between yielded steps; a fully synchronous script cannot be interrupted). ' +
+      'Screenshots and exec run as jobs: without an explicit `base`, both only proceed when exactly one instance answers, ' +
+      'while status/wait/cancel reuse the base recorded for that job ID so they never query a different Blender. On ' +
+      'Windows a minimized Blender window is temporarily restored for the capture and minimized again afterwards; an ' +
+      'opaque black frame is rejected and no output file is published. A wait timeout is not a failure or cancellation: ' +
+      'keep the ID and query it again. Never resubmit a write under a new ID while the old outcome is unknown.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: BRIDGE_ACTIONS, description: 'Operation to perform. Use `list` before passing `base` when several Blender instances are open.' },
-        id: { type: 'string', description: 'Job ID for status, wait and cancel.' },
+        id: { type: 'string', description: 'Job ID for status/wait/cancel; also reused for screenshot/execute retries (same ID + same code/interval/ttl returns the existing job).' },
         base: { type: 'string', description: 'Explicit bridge origin from `list`, e.g. http://127.0.0.1:6418. Overrides the base recorded for the job ID.' },
-        timeoutSeconds: { type: 'integer', description: `Wait budget for the wait action, 1..${MAX_WAIT_SECONDS} (default ${DEFAULT_WAIT_SECONDS}).` },
+        output: { type: 'string', description: 'Screenshot only: absolute path for a NEW .png file (it must not exist). Required for `screenshot`.' },
+        wait: { type: 'boolean', description: 'Screenshot only: wait for capture completion. Default true; false returns the job ID immediately.' },
+        timeoutSeconds: { type: 'integer', description: `Wait budget in seconds, 1..${MAX_WAIT_SECONDS} (default ${DEFAULT_WAIT_SECONDS}); applies to wait and screenshot. Reaching it never cancels the job.` },
+        queueTimeoutSeconds: { type: 'integer', description: `Screenshot only: queue TTL in seconds, 1..${MAX_TTL_SECONDS} (default ${DEFAULT_TTL_SECONDS}).` },
+        intervalSeconds: { type: 'number', description: `Screenshot only: seconds between the capture's yielded preparation steps, ${MIN_INTERVAL_SECONDS}..${MAX_INTERVAL_SECONDS} (default ${DEFAULT_INTERVAL_SECONDS}).` },
       },
       required: ['action'],
       additionalProperties: false,
@@ -593,6 +620,7 @@ export function blenderBridgeTool(config = {}, track = new Map()) {
       render(args, value) {
         if (args?.action === 'health') return renderHealth(value);
         if (args?.action === 'list') return renderList(value);
+        if (args?.action === 'screenshot') return renderScreenshot(value);
         return renderValue(`blender_bridge ${args?.action ?? ''}`.trim(), value);
       },
     },
@@ -605,6 +633,39 @@ export function blenderBridgeTool(config = {}, track = new Map()) {
       if ((action === 'status' || action === 'wait' || action === 'cancel') && !VALID_ID.test(String(args?.id ?? ''))) {
         return failure(new AdapterError(`${action} requires a valid job ID in \`id\`.`, { state: 'rejected', notDispatched: true }), { action });
       }
+
+      if (action === 'screenshot') {
+        // Validate the destination before touching any endpoint; path policy lives
+        // in the shared client. A validation failure is pre-dispatch, never an
+        // uncertain submission.
+        const output = typeof args?.output === 'string' ? args.output.trim() : '';
+        if (!output) {
+          return failure(
+            new AdapterError('screenshot requires `output` with an absolute path for a new .png file.', {
+              state: 'rejected',
+              notDispatched: true,
+              hint: 'Pass a new absolute .png path in `output`. Nothing was submitted.',
+            }),
+            { action: 'screenshot' },
+          );
+        }
+        let code;
+        try {
+          code = screenshotCode(output);
+        } catch (error) {
+          return failure(
+            Object.assign(error, {
+              notDispatched: true,
+              hint: `${error instanceof Error ? error.message : String(error)}. Nothing was submitted; choose a new absolute .png path.`,
+            }),
+            { action: 'screenshot' },
+          );
+        }
+        // Delegate to blender_execute so screenshot jobs share its ID bookkeeping,
+        // endpoint selection, wait/timeout and uncertain-submission semantics.
+        return blenderExecuteTool(config, track).execute({ ...args, code }, exec);
+      }
+
       const id = typeof args?.id === 'string' ? args.id : '';
 
       if (action === 'list') {

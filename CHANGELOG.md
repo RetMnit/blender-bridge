@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+- Validated screenshots shared by Codex CLI and DSH's native screenshot action.
+- Windows minimized captures temporarily restore only the target process window, yield for redraw and restore minimization on success, failure or cancellation.
+- Black RGB frames are rejected before output publication; temporary PNGs are cleaned up and existing outputs are never overwritten.
+- Bridge Stop closes active generators so window cleanup runs. Screenshot lifecycle, adapter recovery and actual GUI minimized/cancel tests added.
+
 ## 0.2.0
 - Shared neutral Blender addon, Codex Skill/CLI and DSH adapter.
 - Visible generator steps: one step per timer tick, active redraw and progress panel.

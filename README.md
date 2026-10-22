@@ -32,7 +32,7 @@ Each yield lets Blender process input and redraw all areas before the next step 
 ## Codex
 
 ```text
-codex plugin marketplace add https://github.com/RetMnit/blender-bridge.git --ref v0.2.0
+codex plugin marketplace add https://github.com/RetMnit/blender-bridge.git --ref v0.3.0
 codex plugin add blender-bridge@blender-bridge-tools
 ```
 
@@ -46,9 +46,13 @@ node <client> wait <job-id> --pid <pid> --timeout 120
 node <client> screenshot --pid <pid> --output <new-absolute.png>
 ```
 
+Screenshots require addon 0.3.0+ and a GUI. On Windows a minimized target window is temporarily restored for two redraw ticks, then minimized again (also on cancellation or failure). Capture targets this Blender process only; ambiguous windows fail rather than guessing. The largest Blender window is selected. The scene, layout and saved files are unchanged. RGB pixels are checked before publishing: a black capture fails without creating the requested output. Existing files are never overwritten. View the returned PNG to verify the intended scene.
+
 ## DSH
 
 Install this repository as a Git-tagged dependency and load `adapters/dsh/index.mjs` through your preset's module loader. The adapter imports the shared client using relative paths; use its `blender_execute` and `blender_bridge` tools. Restart the DSH host after changing execution modules; configuration hot reload does not replace cached JavaScript modules.
+
+Use `blender_bridge {"action":"screenshot","base":"<selected-url>","output":"<new-absolute.png>"}` for the same validated capture as Codex. It supports job IDs, waiting and status/cancel recovery. Raw `bpy.ops.screen.screenshot` bypasses these protections.
 
 ## Execution and recovery
 
@@ -60,6 +64,7 @@ See [protocol](docs/protocol.md). Return values are display strings; print outpu
 npm test
 blender --factory-startup --python tests/bootstrap_gui.py
 node tests/smoke.mjs http://127.0.0.1:<isolated-port>
+node tests/screenshot-smoke.mjs http://127.0.0.1:<isolated-port> <empty-evidence-directory>
 ```
 
 Run smoke tests only in the disposable instance. See [AGENTS.md](AGENTS.md) for maintenance invariants.

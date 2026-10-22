@@ -3,7 +3,7 @@ import bpy
 from bpy.app.handlers import persistent
 from .server import bridge
 
-bl_info = {"name": "Blender Bridge", "author": "RetMnit", "version": (0, 2, 0),
+bl_info = {"name": "Blender Bridge", "author": "RetMnit", "version": (0, 3, 0),
            "blender": (3, 6, 0), "location": "3D View > Sidebar > Bridge",
            "description": "Agent-neutral local Python bridge with visible generator steps", "category": "Development"}
 

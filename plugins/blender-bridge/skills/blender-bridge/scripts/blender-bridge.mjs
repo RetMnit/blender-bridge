@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { readdir, readFile, access } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, isAbsolute, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
@@ -37,6 +37,16 @@ export async function discover() {
 
 export function submit(base, code, { id = randomUUID(), interval = 0.2, ttl = 30, signal } = {}) {
   return request(base, '/api/jobs', { method: 'POST', body: { id, code, interval, ttl }, signal });
+}
+
+export function screenshotCode(output) {
+  if (typeof output !== 'string' || !isAbsolute(output) || extname(output).toLowerCase() !== '.png')
+    throw new Error('Screenshot output must be an absolute .png path');
+  return `from blender_bridge.screenshot import capture\nreturn (yield from capture(${JSON.stringify(output)}))`;
+}
+
+export function submitScreenshot(base, output, options) {
+  return submit(base, screenshotCode(output), options);
 }
 
 export async function wait(base, id, { timeout = 60, signal, onProgress } = {}) {
@@ -90,9 +100,7 @@ async function main(argv) {
     let code;
     if (command === 'screenshot') {
       if (!opts.output) throw new Error('--output is required');
-      if (await access(resolve(opts.output)).then(() => true, () => false)) throw new Error('Screenshot output already exists; choose a new path');
-      // Blender captures its actual window; do not change the user's editor layout.
-      code = `bpy.ops.screen.screenshot(filepath=${JSON.stringify(resolve(opts.output))})\nreturn 'Screenshot saved'`;
+      code = screenshotCode(resolve(opts.output));
     } else {
       if (!opts.file) throw new Error('--file is required');
       code = await readFile(opts.file, 'utf8');

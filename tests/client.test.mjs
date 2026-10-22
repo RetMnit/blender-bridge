@@ -1,7 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { request, submit, wait } from '../plugins/blender-bridge/skills/blender-bridge/scripts/blender-bridge.mjs';
+import { request, submit, wait, screenshotCode } from '../plugins/blender-bridge/skills/blender-bridge/scripts/blender-bridge.mjs';
+import { resolve } from 'node:path';
+
+test('screenshot uses shared validated generator and rejects unsafe output paths', () => {
+  const output = resolve('capture "你好".png');
+  const code = screenshotCode(output);
+  assert.match(code, /yield from capture/);
+  assert.ok(code.includes(JSON.stringify(output)));
+  for (const path of [undefined, 'relative.png', resolve('capture.jpg')])
+    assert.throws(() => screenshotCode(path), /absolute .png/);
+});
 
 test('client preserves IDs, errors, polls status without resubmitting', async () => {
   const received = [];

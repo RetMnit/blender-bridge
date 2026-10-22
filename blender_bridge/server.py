@@ -19,7 +19,7 @@ import uuid
 
 import bpy
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 TERMINAL = {"succeeded", "failed", "cancelled", "expired", "interrupted"}
 DISCOVERY = Path(tempfile.gettempdir()) / "blender-bridge"
 MAX_BODY = 1024 * 1024
@@ -184,6 +184,14 @@ class Bridge:
         self.enabled = False
         if bpy.app.timers.is_registered(self.timer_callback):
             bpy.app.timers.unregister(self.timer_callback)
+        # Close outside the lock, on the main thread, so screenshot finally blocks
+        # restore a temporarily exposed window on stop/load as well as cancel.
+        if self.active and self.active["generator"]:
+            try:
+                self.active["generator"].close()
+            except BaseException:
+                traceback.print_exc()
+            self.active["generator"] = None
         with self.lock:
             for job in self.jobs.values():
                 if job["status"] not in TERMINAL:

@@ -49,6 +49,14 @@ class QueueTests(unittest.TestCase):
         self.assertIsNone(bridge.poll())
         self.assertFalse(bridge.enabled)
 
+    def test_stop_closes_active_generator_cleanup(self):
+        bridge = self.make_bridge()
+        job, _ = bridge.submit({'code': "try:\n    yield 'restored'\nfinally:\n    D.cleaned = True"})
+        bridge.poll()
+        bridge.stop()
+        self.assertTrue(server.bpy.data.cleaned)
+        self.assertIsNone(job['generator'])
+
     def test_distinct_listeners_and_descriptor_cleanup(self):
         first, second = server.Bridge(), server.Bridge()
         try:

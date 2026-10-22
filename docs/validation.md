@@ -1,4 +1,16 @@
-# 0.2.0 validation
+# 0.3.0 validation
+
+Windows / Blender 5.2.0 LTS, disposable factory-startup GUI:
+
+- Normal and minimized captures produce visible 3840×2066 Blender screenshots, RGB maximum 1.0 and mean about 0.236. The PNG was viewed to confirm the cube and editor UI.
+- Minimized capture restores the window only during the job, then returns it to minimized state. Scene object names, positions and scales remain identical.
+- Cancellation after the first redraw restores minimization and publishes no output. Existing output is rejected with its timestamp/content preserved.
+- Two simultaneous Blender processes use distinct endpoints. Capturing the selected minimized instance leaves both instances minimized afterward; the other process is not restored. The DSH adapter's real handler uses the same capture job successfully.
+- Python tests cover opaque-black RGB rejection, temporary-file cleanup on GPU/operator error, generator closure cleanup, background rejection and existing-file preservation. Stop closes active generators.
+- Client/adapter tests cover shared capture submission, path validation, job IDs, endpoint tracking, wait:false, timeout and lost-response recovery.
+- Automatic restoration is implemented for Windows; other OSes and Blender versions were not exercised for this change. Black-frame validation does not prove every pixel is current or the intended view; inspect the image.
+
+## Earlier protocol-2 coverage (0.2.0)
 
 Verified on Windows with Blender 5.2.0 LTS GUI and bundled Python 3.13.13, using a disposable factory-startup instance.
 

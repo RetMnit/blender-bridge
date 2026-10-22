@@ -1,0 +1,4 @@
+{
+  "name": "blender-bridge-tools",
+  "plugins": [{"name": "blender-bridge", "source": {"source": "local", "path": "./plugins/blender-bridge"}, "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"}, "category": "Developer Tools"}]
+}

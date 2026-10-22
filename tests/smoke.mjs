@@ -1,0 +1,36 @@
+// Run only against the disposable GUI launched by bootstrap_gui.py.
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { request, submit, wait } from '../plugins/blender-bridge/skills/blender-bridge/scripts/blender-bridge.mjs';
+const base = process.argv[2];
+if (!base) throw new Error('Provide isolated Blender URL');
+const prefix = randomUUID().slice(0, 8);
+const id = name => `${prefix}-${name}`;
+const run = async (name, code, extra = {}) => {
+  const job = await submit(base, code, { id: id(name), ...extra });
+  return wait(base, job.id, { timeout: 15 });
+};
+assert.equal((await request(base, '/api/health')).background, false);
+const job = await run('basic', "print('bridge-log')\nreturn 7");
+assert.equal(job.result, '7');
+assert.deepEqual(job.logs, ['bridge-log']);
+assert.equal((await submit(base, "print('bridge-log')\nreturn 7", { id: job.id })).status, 'succeeded');
+await assert.rejects(submit(base, 'return 8', { id: job.id }), /different payload/);
+assert.equal((await run('error', "raise ValueError('expected-smoke')")).status, 'failed');
+const legacy = await request(base, '/api/execute', { method: 'POST', body: { code: 'return 42' } });
+assert.equal(legacy.result, '42');
+await assert.rejects(request(base, '/api/jobs', { method: 'POST', body: { code: 42 } }), /empty code/);
+await assert.rejects(request(base, '/api/health', { headers: { Origin: 'https://example.com' } }), /non-browser/);
+const blocker = await submit(base, "for i in range(40):\n    yield str(i)\nreturn 'complete'", { id: id('blocker'), interval: 0.1 });
+while ((await request(base, `/api/jobs/${blocker.id}`)).steps < 1) await new Promise(done => setTimeout(done, 50));
+const expired = await submit(base, "bpy.context.scene['should_not_run'] = True", { id: id('expiry'), ttl: 1 });
+const cancelled = await submit(base, "bpy.context.scene['should_not_run'] = True", { id: id('cancel') });
+assert.equal((await request(base, `/api/jobs/${cancelled.id}/cancel`, { method: 'POST', body: {} })).status, 'cancelled');
+await assert.rejects(wait(base, blocker.id, { timeout: 0.1 }), /do not resubmit/);
+assert.equal((await wait(base, expired.id, { timeout: 10 })).status, 'expired');
+assert.equal((await run('no-mutation', "return 'should_not_run' in bpy.context.scene")).result, 'False');
+const active = await submit(base, "for i in range(40):\n    yield str(i)", { id: id('running-cancel') });
+while ((await request(base, `/api/jobs/${active.id}`)).steps < 1) await new Promise(done => setTimeout(done, 50));
+await request(base, `/api/jobs/${active.id}/cancel`, { method: 'POST', body: {} });
+assert.equal((await wait(base, active.id)).status, 'cancelled');
+console.log('PASS: GUI health, return/logs, dedup/conflict, error, legacy, malformed input, Origin rejection, timeout recovery, queue expiry, queued/running cancellation');

@@ -1,0 +1,10 @@
+# Blender Bridge — shared executor and clients
+
+- `blender_bridge/`: Blender addon, neutral module identity. `plugins/blender-bridge/`: self-contained Codex Skill/CLI. `adapters/dsh/`: DSH native tools. Keep clients on the same protocol; never add a user-specific absolute path to distributed sources.
+- Current version 0.2.0 / protocol 2; preserve legacy `/api/health` and `/api/execute` result/logs/error shapes. Legacy timeouts now include an ID and require querying status. Source originated in DSH's v0.1 addon.
+- All bpy access and user code runs on Blender's main thread. HTTP threads must only read cached metadata or synchronized job records. Never hold the job lock while executing Python or waiting for HTTP.
+- One short command or generator step per timer callback, followed by redraw. Never drain the queue in one callback. Generator `yield` is the visibility boundary; long synchronous work cannot refresh the GUI or be safely preempted.
+- IDs deduplicate only within retained memory (128 jobs) and the current Blender session. Never replay after restart. Unknown/evicted jobs require scene inspection before retry. Queue TTL is not running-code cancellation. A cancelled generator leaves prior mutations in place.
+- Test in an isolated factory-startup GUI; never run destructive test code against a user scene. `npm test` runs client tests; `tests/smoke.mjs <isolated-url>` runs real bpy/HTTP checks. Capture separate screenshots at yielded steps and inspect them for visual changes.
+- Release changes through immutable Git tags; do not move published tags or force push. Keep addon, plugin, package, docs and adapters aligned. Exclude user preferences, blend files, screenshots, local descriptors, secrets, node_modules and private task notes from Git.
+- Any change affecting agent configuration must be synchronized in all consumers. DSH owns its own private preset and notes; Common contains only portable assets.

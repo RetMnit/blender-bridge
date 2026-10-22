@@ -1,0 +1,9 @@
+{
+  "name": "@retmnit/blender-bridge",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": { ".": "./adapters/dsh/index.mjs", "./client": "./plugins/blender-bridge/skills/blender-bridge/scripts/blender-bridge.mjs" },
+  "scripts": { "test": "node --test tests/client.test.mjs" }
+}

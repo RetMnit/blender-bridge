@@ -6,7 +6,7 @@ $base = Join-Path $env:APPDATA "Blender Foundation\Blender\$Version\scripts\addo
 $target = Join-Path $base 'blender_bridge'
 New-Item -ItemType Directory -Path $target -Force | Out-Null
 # Copy only maintained sources. No recursive delete and no user preferences reset.
-Copy-Item -LiteralPath (Join-Path $source '__init__.py'),(Join-Path $source 'server.py'),(Join-Path $source 'screenshot.py') -Destination $target -Force
+Copy-Item -LiteralPath (Join-Path $source '__init__.py'),(Join-Path $source 'server.py'),(Join-Path $source 'screenshot.py'),(Join-Path $source 'startup.py'),(Join-Path $source 'render.py') -Destination $target -Force
 Write-Output "Installed -> $target"
 if ($Enable) {
     $exe = Join-Path $env:ProgramFiles "Blender Foundation\Blender $Version\blender.exe"

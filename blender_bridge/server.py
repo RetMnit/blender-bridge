@@ -19,7 +19,7 @@ import uuid
 
 import bpy
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 TERMINAL = {"succeeded", "failed", "cancelled", "expired", "interrupted"}
 DISCOVERY = Path(tempfile.gettempdir()) / "blender-bridge"
 MAX_BODY = 1024 * 1024
@@ -114,6 +114,11 @@ class Busy(Exception):
     pass
 
 
+class JobCancelled(Exception):
+    """A cooperative operation observed actual native cancellation."""
+    pass
+
+
 class HTTPServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
@@ -150,7 +155,8 @@ class Bridge:
                        "blender": bpy.app.version_string, "python": sys.version.split()[0],
                        "pid": os.getpid(), "session": self.session,
                        "file": bpy.data.filepath, "background": bpy.app.background,
-                       "url": "http://127.0.0.1:%s" % self.httpd.server_port if self.httpd else ""}
+                       "url": "http://127.0.0.1:%s" % self.httpd.server_port if self.httpd else "",
+                       "rendering": getattr(bpy.app, 'is_job_running', lambda _: False)('RENDER')}
 
     def start(self, port=6418):
         self.enabled = True
@@ -244,13 +250,18 @@ class Bridge:
     def snapshot(self, job_id):
         with self.lock:
             job = self.jobs.get(job_id)
-            return {key: (list(job[key]) if key == "logs" else job[key]) for key in
+            result = {key: (list(job[key]) if key == "logs" else job[key]) for key in
                     ("id", "status", "created", "logs", "result", "error", "progress", "steps")} if job else None
+            if job and 'render' in job:
+                result['render'] = dict(job['render'])
+            return result
 
     def cancel(self, job_id):
         with self.lock:
             job = self.jobs.get(job_id)
             if job and job["status"] not in TERMINAL:
+                if job.get('cancel_policy') == 'native-render':
+                    raise Conflict('Native render is still tracked. Cancel it in Blender (Render window Escape); query this same job ID until terminal. Bridge cancel does not stop the renderer.')
                 if job["status"] == "queued":
                     self.finish(job, "cancelled")
                 else:
@@ -293,6 +304,8 @@ class Bridge:
                     job["progress"] = stringify(value)[:8192]
                     job["steps"] += 1
                 self.last_status = "%s: step %s — %s" % (job["id"][:8], job["steps"], job["progress"][:100])
+        except JobCancelled as exc:
+            completion = ("cancelled", str(exc))
         except StopIteration as stop:
             job["result"] = stringify(stop.value)
             completion = ("succeeded", "")

@@ -1,4 +1,15 @@
-# 0.3.0 validation
+# 0.4.0 validation
+
+Windows / Blender 5.2.0 LTS / Node 22, isolated GUI instances:
+
+- All 11 Node and 20 Python tests passed, including render submission/endpoint tracking, duplicate IDs, native cancellation policy, callback/native teardown ordering, output races, failed-save cleanup and startup preference restoration.
+- Real GUI still rendering passed running-state observation, short client timeout with same-ID recovery, duplicate submission, rejection of bridge cancellation while the native renderer runs, completed PNG output, existing-file protection and missing-scene rejection.
+- Real Escape input in Blender's Render window produced a cancelled job with no output. Blender's synthetic event_simulate Escape did not reliably cancel native rendering and is not used as evidence of cancellation. The interactive cancellation smoke requires actual UI input.
+- Normal startup with the addon enabled (isolated copy of existing preferences and scripts, without factory-startup/bootstrap) showed the viewport without the splash. Splash/autosave preferences returned to their original values; the preference file hash was unchanged. A screenshot was visually inspected.
+- Registering render_stats exposed a Blender 5.2 native null-string crash. The released implementation does not register this callback; progress is phase and elapsed time only.
+- The render feature is GUI-only and covers still images, not animation rendering. Stop interrupts monitoring, not the native renderer. Existing/manually opened popups are not automatically dismissed. Protocol 2 and existing screenshot behavior remain unchanged.
+
+## 0.3.0 validation
 
 Windows / Blender 5.2.0 LTS, disposable factory-startup GUI:
 

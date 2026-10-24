@@ -57,6 +57,19 @@ class QueueTests(unittest.TestCase):
         self.assertTrue(server.bpy.data.cleaned)
         self.assertIsNone(job['generator'])
 
+    def test_running_native_render_cancel_is_rejected_without_losing_tracking(self):
+        bridge = self.make_bridge()
+        job, _ = bridge.submit({'code': "yield 'rendering'\nyield 'still rendering'"})
+        bridge.poll()
+        job['cancel_policy'] = 'native-render'
+        job['render'] = {'state': 'running'}
+        with self.assertRaisesRegex(server.Conflict, 'Cancel it in Blender'):
+            bridge.cancel(job['id'])
+        self.assertFalse(job['cancel'])
+        self.assertEqual(bridge.snapshot(job['id'])['render']['state'], 'running')
+        bridge.poll()
+        self.assertEqual(job['status'], 'running')
+
     def test_distinct_listeners_and_descriptor_cleanup(self):
         first, second = server.Bridge(), server.Bridge()
         try:

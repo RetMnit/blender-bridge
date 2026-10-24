@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 — 2026-10-24
+- Skip the automatic startup splash while restoring the original splash/autosave preferences; no preference file is saved.
+- Add tracked asynchronous still rendering to the shared CLI and DSH adapter. Jobs remain running until Blender finishes or cancels; optional PNG outputs are published without overwriting existing files.
+- Expose native render activity, per-job phase and elapsed time. Wait timeouts never cancel or detach rendering; native cancellation is observed through Blender handlers.
+- Add real render/cancellation and startup preference regressions. Avoid the unsafe render_stats callback on Blender 5.2.
+
 ## 0.3.0
 - Validated screenshots shared by Codex CLI and DSH's native screenshot action.
 - Windows minimized captures temporarily restore only the target process window, yield for redraw and restore minimization on success, failure or cancellation.

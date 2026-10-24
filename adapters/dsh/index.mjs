@@ -2,7 +2,7 @@
 //
 // Registers two model tools:
 //   blender_execute — run Python/bpy in the running Blender (protocol 2 job API)
-//   blender_bridge  — health / list / screenshot / status / wait / cancel
+//   blender_bridge  — health / list / screenshot / render / status / wait / cancel
 //
 // Protocol logic lives entirely in the shared public client
 // (../../plugins/blender-bridge/skills/blender-bridge/scripts/blender-bridge.mjs),
@@ -29,6 +29,7 @@ import {
   wait,
   discover,
   screenshotCode,
+  renderCode,
 } from '../../plugins/blender-bridge/skills/blender-bridge/scripts/blender-bridge.mjs';
 
 export const name = 'tool-blender-bridge';
@@ -46,9 +47,11 @@ const MAX_INTERVAL_SECONDS = 10;
 const MAX_TRACKED_JOBS = 128;
 const VALID_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'expired', 'interrupted']);
-const BRIDGE_ACTIONS = ['health', 'list', 'screenshot', 'status', 'wait', 'cancel'];
+const BRIDGE_ACTIONS = ['health', 'list', 'screenshot', 'render', 'status', 'wait', 'cancel'];
 
 const BASE_PROPERTIES = {
+  renderState: { type: 'string', description: 'Tracked native render phase, when present.' },
+  renderElapsedSeconds: { type: 'number', description: 'Elapsed native render time, when present.' },
   ok: { type: 'boolean', description: 'Whether the bridge interaction itself succeeded.' },
   status: { type: 'integer', description: 'HTTP status of the underlying call, or 0 when the transport failed.' },
   outcome: {
@@ -290,6 +293,7 @@ function resultHint(outcome, snapshot) {
 function jobValue(snapshot, base, hint = '') {
   const outcome = outcomeOf(snapshot);
   return baseValue({
+    ...(snapshot?.render ? { renderState: snapshot.render.state, renderElapsedSeconds: snapshot.render.elapsed_seconds } : {}),
     ok: true,
     status: 200,
     outcome,
@@ -417,6 +421,7 @@ function renderHealth(value) {
     `blender_bridge health: Blender ${value.blender || '?'} / bridge ${value.bridgeVersion || '?'} / protocol ${value.protocol || '?'}`,
     value.file ? `file: ${value.file}` : '',
     value.background ? 'mode: background (GUI redraw is not guaranteed)' : '',
+    value.rendering ? 'native render: running' : '',
     value.url ? `endpoint: ${value.url}` : '',
     value.error ? `error: ${value.error}` : '',
     value.hint ? `note: ${value.hint}` : '',
@@ -583,7 +588,7 @@ export function blenderBridgeTool(config = {}, track = new Map()) {
     description:
       'Manage the Blender Bridge and its jobs. Actions: `list` (all Blender instances answering discovery; run it first ' +
       'when several are open), `health` (bridge/protocol version, Blender version, file, pid), `screenshot` (capture the ' +
-      'real Blender window to a new absolute .png; requires bridge add-on >= 0.3.0), `status` (one job by ID, including ' +
+      'real Blender window to a new absolute .png; requires bridge add-on >= 0.3.0), `render` (tracked asynchronous still render; add-on >= 0.4.0; succeeds only after completion; cancel native rendering in Blender), `status` (one job by ID, including ' +
       'progress/steps/result/logs), `wait` (poll one job until terminal or the budget ends), `cancel` (queued jobs stop ' +
       'immediately; a running generator stops between yielded steps; a fully synchronous script cannot be interrupted). ' +
       'Screenshots and exec run as jobs: without an explicit `base`, both only proceed when exactly one instance answers, ' +
@@ -597,11 +602,12 @@ export function blenderBridgeTool(config = {}, track = new Map()) {
         action: { type: 'string', enum: BRIDGE_ACTIONS, description: 'Operation to perform. Use `list` before passing `base` when several Blender instances are open.' },
         id: { type: 'string', description: 'Job ID for status/wait/cancel; also reused for screenshot/execute retries (same ID + same code/interval/ttl returns the existing job).' },
         base: { type: 'string', description: 'Explicit bridge origin from `list`, e.g. http://127.0.0.1:6418. Overrides the base recorded for the job ID.' },
-        output: { type: 'string', description: 'Screenshot only: absolute path for a NEW .png file (it must not exist). Required for `screenshot`.' },
-        wait: { type: 'boolean', description: 'Screenshot only: wait for capture completion. Default true; false returns the job ID immediately.' },
-        timeoutSeconds: { type: 'integer', description: `Wait budget in seconds, 1..${MAX_WAIT_SECONDS} (default ${DEFAULT_WAIT_SECONDS}); applies to wait and screenshot. Reaching it never cancels the job.` },
-        queueTimeoutSeconds: { type: 'integer', description: `Screenshot only: queue TTL in seconds, 1..${MAX_TTL_SECONDS} (default ${DEFAULT_TTL_SECONDS}).` },
-        intervalSeconds: { type: 'number', description: `Screenshot only: seconds between the capture's yielded preparation steps, ${MIN_INTERVAL_SECONDS}..${MAX_INTERVAL_SECONDS} (default ${DEFAULT_INTERVAL_SECONDS}).` },
+        output: { type: 'string', description: 'Absolute path for a NEW .png file. Required for screenshot; optional for render (omitted keeps Render Result in Blender).' },
+        scene: { type: 'string', description: 'Render only: scene name. Omit for the current scene.' },
+        wait: { type: 'boolean', description: 'Screenshot/render: wait for actual completion. Default true; false returns the job ID immediately.' },
+        timeoutSeconds: { type: 'integer', description: `Wait budget in seconds, 1..${MAX_WAIT_SECONDS} (default ${DEFAULT_WAIT_SECONDS}); applies to wait, screenshot and render. Reaching it never cancels the job.` },
+        queueTimeoutSeconds: { type: 'integer', description: `Screenshot/render: queue TTL in seconds, 1..${MAX_TTL_SECONDS} (default ${DEFAULT_TTL_SECONDS}).` },
+        intervalSeconds: { type: 'number', description: `Screenshot/render: seconds between yielded steps, ${MIN_INTERVAL_SECONDS}..${MAX_INTERVAL_SECONDS} (default ${DEFAULT_INTERVAL_SECONDS}).` },
       },
       required: ['action'],
       additionalProperties: false,
@@ -615,6 +621,7 @@ export function blenderBridgeTool(config = {}, track = new Map()) {
         session: { type: 'string', description: 'Bridge session id reported by health.' },
         file: { type: 'string', description: 'Currently open .blend file reported by health.' },
         background: { type: 'boolean', description: 'True when Blender runs without a GUI.' },
+        rendering: { type: 'boolean', description: 'Cached native renderer activity from Blender health.' },
         instances: { type: 'array', items: { type: 'string' }, description: 'One line per discovered Blender instance (list).' },
       }),
       render(args, value) {
@@ -632,6 +639,15 @@ export function blenderBridgeTool(config = {}, track = new Map()) {
       }
       if ((action === 'status' || action === 'wait' || action === 'cancel') && !VALID_ID.test(String(args?.id ?? ''))) {
         return failure(new AdapterError(`${action} requires a valid job ID in \`id\`.`, { state: 'rejected', notDispatched: true }), { action });
+      }
+
+      if (action === 'render') {
+        try {
+          const code = renderCode(args.output, args.scene);
+          return blenderExecuteTool(config, track).execute({ ...args, code }, exec);
+        } catch (error) {
+          return failure(Object.assign(error, { notDispatched: true }), { action });
+        }
       }
 
       if (action === 'screenshot') {
@@ -722,6 +738,7 @@ export function blenderBridgeTool(config = {}, track = new Map()) {
             session: String(health?.session ?? ''),
             file: String(health?.file ?? ''),
             background: health?.background === true,
+            rendering: health?.rendering === true,
           });
           if (Number.isInteger(health?.pid)) value.pid = health.pid;
           return mergeNote(value, note);

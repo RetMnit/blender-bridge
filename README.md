@@ -16,6 +16,8 @@ The server binds loopback, preferring port 6418 and choosing a free port if occu
 
 ## Watch the agent work
 
+The enabled addon skips the automatic startup splash so it cannot cover modeling steps. It temporarily disables splash display and preference autosave, then restores both original values after startup without saving preferences. Help > Splash Screen still works. This does not dismiss popups that were already open before addon activation; inspect the view before proceeding.
+
 Each request runs Python on Blender's main thread. A single long script prevents the GUI from updating until it returns. Write short steps with `yield` between them:
 
 ```python
@@ -32,7 +34,7 @@ Each yield lets Blender process input and redraw all areas before the next step 
 ## Codex
 
 ```text
-codex plugin marketplace add https://github.com/RetMnit/blender-bridge.git --ref v0.3.0
+codex plugin marketplace add https://github.com/RetMnit/blender-bridge.git --ref v0.4.0
 codex plugin add blender-bridge@blender-bridge-tools
 ```
 
@@ -55,6 +57,18 @@ Install this repository as a Git-tagged dependency and load `adapters/dsh/index.
 Use `blender_bridge {"action":"screenshot","base":"<selected-url>","output":"<new-absolute.png>"}` for the same validated capture as Codex. It supports job IDs, waiting and status/cancel recovery. Raw `bpy.ops.screen.screenshot` bypasses these protections.
 
 ## Execution and recovery
+
+### Tracked still renders (0.4.0+)
+
+```text
+node <client> render --pid <pid> --output <new-absolute.png> --no-wait
+node <client> status <returned-id> --pid <pid>
+node <client> wait <returned-id> --pid <pid> --timeout 60
+```
+
+Omit output to keep only Blender's Render Result; use `--scene <name>` to select a scene. The DSH equivalent is `blender_bridge {"action":"render","base":"<selected-url>","output":"<new-absolute.png>","wait":false}`. Both use one tracked generator: the job remains running until Blender's completion/cancel callback and renderer teardown agree. Status carries render phase and elapsed time; no sample percentage is claimed. PNG publication never overwrites another file, and render output settings are restored.
+
+A client timeout is not cancellation. Query the same ID. A queued render can be cancelled, but cancelling an already running render through the bridge returns 409 and continues tracking it. Use Escape in Blender's actual Render UI to cancel, then query the original job until it reports cancelled. Bridge Stop detaches monitoring and reports interrupted; it cannot forcibly stop Blender's native renderer. Normal exec that only calls INVOKE_DEFAULT still means "render started" and should not replace this command.
 
 See [protocol](docs/protocol.md). Return values are display strings; print output is captured. Scripts have `bpy`, `C`, `D`, `context`, `mathutils`. Changes are not automatically undone or saved. A timeout/disconnect is not cancellation: query the printed job ID and original endpoint/session before retrying. IDs and results are held in memory (up to 128); restarting Blender does not replay work. A running generator can be cancelled between steps; prior mutations remain. Never expose this arbitrary Python executor outside loopback; untrusted browser Origin requests are rejected.
 

@@ -2,8 +2,9 @@
 import bpy
 from bpy.app.handlers import persistent
 from .server import bridge
+from . import startup
 
-bl_info = {"name": "Blender Bridge", "author": "RetMnit", "version": (0, 3, 0),
+bl_info = {"name": "Blender Bridge", "author": "RetMnit", "version": (0, 4, 0),
            "blender": (3, 6, 0), "location": "3D View > Sidebar > Bridge",
            "description": "Agent-neutral local Python bridge with visible generator steps", "category": "Development"}
 
@@ -55,6 +56,7 @@ def autostart():
 
 
 def register():
+    startup.suppress_startup_splash()
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.app.handlers.load_post.append(on_load)
@@ -62,6 +64,7 @@ def register():
 
 
 def unregister():
+    startup.cleanup()
     if bpy.app.timers.is_registered(autostart):
         bpy.app.timers.unregister(autostart)
     bridge.stop()

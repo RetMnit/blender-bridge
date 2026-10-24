@@ -1,8 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { request, submit, wait, screenshotCode } from '../plugins/blender-bridge/skills/blender-bridge/scripts/blender-bridge.mjs';
+import { request, submit, wait, screenshotCode, renderCode } from '../plugins/blender-bridge/skills/blender-bridge/scripts/blender-bridge.mjs';
 import { resolve } from 'node:path';
+
+test('render uses tracked lifecycle with optional output and safely quoted scene', () => {
+  assert.match(renderCode(), /output=None, scene_name=None/);
+  const name = 'Scene "你好"';
+  assert.ok(renderCode(resolve('new.png'), name).includes(JSON.stringify(name)));
+  assert.match(renderCode(), /yield from render_still/);
+  for (const output of ['relative.png', resolve('bad.jpg'), null])
+    assert.throws(() => renderCode(output), /absolute .png/);
+});
 
 test('screenshot uses shared validated generator and rejects unsafe output paths', () => {
   const output = resolve('capture "你好".png');

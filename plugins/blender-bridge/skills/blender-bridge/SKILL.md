@@ -13,6 +13,8 @@ Use Node 22+ with the bundled `scripts/blender-bridge.mjs`, resolving the path r
 4. Each exec prints its ID and endpoint before submission. A timeout, disconnect or interrupted wait is **not cancellation**. Use `status <id>` or `wait <id>` on that same endpoint; never repeat the write with a new ID. Same-ID/same-payload is deduplicated only while the in-memory record is retained (up to 128 jobs). Session restart/unknown/evicted ID requires inspecting scene state before retry. No jobs are replayed after restart. Capture the session from health when resolving uncertainty.
 5. `cancel <id>` prevents queued execution; a running generator stops between steps, preserving earlier mutations. Running synchronous code cannot be safely preempted. Queue TTL (`--ttl 30`, max 3600 seconds) only limits time before execution begins.
 6. Use `screenshot --output <new absolute.png>` (addon 0.3.0+) for validated capture, then view the PNG. On Windows a minimized target is temporarily restored for two redraw ticks and minimized again after capture, failure or cancellation. The largest Blender window is selected within this process; ambiguous native windows fail safely. RGB black captures fail without publishing output; existing files are never overwritten. Requires GUI; automatic minimized-window restoration is Windows-only. Raw `bpy.ops.screen.screenshot` bypasses these safeguards. A wait timeout still requires querying the original job ID; it does not cancel capture.
+7. Use `render [--output <new absolute.png>] [--scene <name>] --no-wait` (addon 0.4.0+) for a tracked asynchronous still render. Query `status`/`wait` with the returned ID until terminal. Success requires a completion callback and native renderer teardown; merely starting `bpy.ops.render.render('INVOKE_DEFAULT')` is not completion. Output is optional (otherwise Render Result stays in Blender); existing files are never overwritten. Status includes `render.state`, `elapsed_seconds`, `scene`, `output`; health includes `rendering`. Progress reports phase/time, not sample percentage. A queued render can be cancelled normally; after it starts, bridge cancel returns 409 without detaching monitoring. Cancel through Blender's Render UI and keep querying the same ID. Bridge Stop interrupts monitoring but does not forcibly stop Blender's renderer. Do not install a `render_stats` handler: Blender 5.2 can crash on a null native stats payload.
+8. Addon 0.4.0 skips the automatic startup splash and restores the user's splash/autosave preferences without saving them. It does not dismiss existing or manually opened popups; inspect screenshots before claiming the viewport is ready. Enable the addon before launching a GUI for the startup suppression to take effect.
 
 ```text
 node <client> list
@@ -20,6 +22,7 @@ node <client> health --pid <pid>
 node <client> exec --pid <pid> --file <steps.py> --interval 0.3 --no-wait
 node <client> wait <id> --pid <pid> --timeout 120
 node <client> screenshot --pid <pid> --output <new.png>
+node <client> render --pid <pid> --output <new-render.png> --no-wait
 ```
 
 Example Python body (use a disposable scene for demonstrations):

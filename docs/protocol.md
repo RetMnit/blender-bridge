@@ -1,4 +1,4 @@
-# Protocol 2 (bridge 0.3.0)
+# Protocol 2 (bridge 0.4.0)
 
 All endpoints are loopback HTTP, JSON UTF-8. Reject browser Origin requests and nonlocal Host headers. Maximum request body 1 MiB. Trusted local processes can execute arbitrary Python; this is not a network authentication system.
 
@@ -17,6 +17,12 @@ The main-thread timer executes at most one command/generator step per tick. A fu
 Job records are in memory, bounded at 128. Terminal records are evicted first; if all are pending reject new work. Never replay automatically. Deduplication does not survive addon/Blender restart; inspect health.session to detect restart. A queue TTL only expires work before starting. Stopping the addon or loading a file marks pending work interrupted. No durable execution guarantee is claimed.
 
 Discovery files are `<OS-temp>/blender-bridge/<pid>.json`. Verify live health PID and session; ignore stale or mismatched descriptors. Fixed port 6418 is only a preference; use the endpoint from the selected descriptor. Multiple instances use distinct ports. No bpy API is accessed from HTTP worker threads.
+
+## Tracked still renders (addon 0.4.0+)
+
+`renderCode(output?,scene?)` / `submitRender(base,{output?,scene?,...jobOptions})` and CLI/DSH `render` create ordinary generator jobs. Health adds cached `rendering`; tracked job snapshots add `render: {state,scene,elapsed_seconds,output}`. Phases are starting/running/finishing/completed/cancelled/failed/interrupted; job statuses retain the protocol-2 vocabulary. Output may be null (in-memory Render Result) or a new absolute PNG path. Completion requires render_complete plus is_job_running('RENDER') becoming false; render_cancel produces cancelled without output. Render start is not render completion. Progress is elapsed time, not sample percentage.
+
+While native rendering is tracked, POST cancel returns 409 with guidance to cancel through Blender's Render UI; the job remains running and queryable. Queued render cancellation still prevents execution. Bridge Stop interrupts monitoring, cleans up handlers and does not claim to cancel the native renderer. Output is saved after confirmed completion through a temporary sibling PNG and no-overwrite publication; image format is restored even on save failure. No render_stats hook is installed because some Blender builds crash before Python receives a null stats string.
 
 ## Validated screenshots (addon 0.3.0+)
 

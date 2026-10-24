@@ -49,6 +49,17 @@ export function submitScreenshot(base, output, options) {
   return submit(base, screenshotCode(output), options);
 }
 
+export function renderCode(output, scene) {
+  if (output !== undefined && (typeof output !== 'string' || !isAbsolute(output) || extname(output).toLowerCase() !== '.png'))
+    throw new Error('Render output must be a new absolute .png path');
+  if (scene !== undefined && (typeof scene !== 'string' || !scene.trim())) throw new Error('Render scene must be a nonempty name');
+  return `from blender_bridge.render import render_still\nreturn (yield from render_still(output=${output === undefined ? 'None' : JSON.stringify(output)}, scene_name=${scene === undefined ? 'None' : JSON.stringify(scene)}))`;
+}
+
+export function submitRender(base, { output, scene, ...options } = {}) {
+  return submit(base, renderCode(output, scene), options);
+}
+
 export async function wait(base, id, { timeout = 60, signal, onProgress } = {}) {
   const deadline = Date.now() + timeout * 1000;
   while (true) {
@@ -79,7 +90,7 @@ async function main(argv) {
     } else positional.push(args[i]);
   }
   if (!command || command === 'help') {
-    console.log('Blender Bridge: list | health | exec --file script.py [--id ID --interval 0.2 --ttl 30 --timeout 60 --no-wait] | status ID | wait ID | cancel ID | screenshot --output new.png. Target with --url URL or --pid PID.');
+    console.log('Blender Bridge: list | health | exec --file script.py [--id ID --interval 0.2 --ttl 30 --timeout 60 --no-wait] | status ID | wait ID | cancel ID | screenshot --output new.png | render [--output new.png --scene NAME --no-wait]. Target with --url URL or --pid PID. Render succeeds only after completion; cancel native renders in Blender.');
     return;
   }
   if (command === 'list') { console.log(JSON.stringify(await discover(), null, 2)); return; }
@@ -96,11 +107,13 @@ async function main(argv) {
     result = command === 'wait' ? await wait(base, positional[0], { timeout: Number(opts.timeout || 60) })
       : await request(base, `/api/jobs/${encodeURIComponent(positional[0])}${command === 'cancel' ? '/cancel' : ''}`,
           command === 'cancel' ? { method: 'POST', body: {} } : {});
-  } else if (command === 'exec' || command === 'screenshot') {
+  } else if (command === 'exec' || command === 'screenshot' || command === 'render') {
     let code;
     if (command === 'screenshot') {
       if (!opts.output) throw new Error('--output is required');
       code = screenshotCode(resolve(opts.output));
+    } else if (command === 'render') {
+      code = renderCode(opts.output ? resolve(opts.output) : undefined, opts.scene);
     } else {
       if (!opts.file) throw new Error('--file is required');
       code = await readFile(opts.file, 'utf8');

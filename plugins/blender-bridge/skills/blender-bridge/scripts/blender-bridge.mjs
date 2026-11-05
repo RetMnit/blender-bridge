@@ -6,14 +6,32 @@ import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 export const terminal = new Set(['succeeded', 'failed', 'cancelled', 'expired', 'interrupted']);
+const states = new Set(['queued', 'running', ...terminal]);
 
-export async function request(base, path, options = {}) {
-  const url = new URL(base);
+/** A job reply must name the requested ID and a known status; anything else proves nothing about the job. */
+export function checkJob(data, id) {
+  if (!data || typeof data !== 'object' || data.id !== id || !states.has(data.status))
+    throw Object.assign(new Error(`Blender returned an invalid or mismatched reply for job ${id}.`), { id, unknown: true, invalidResponse: true });
+  return data;
+}
+
+/** Parse and check an endpoint; only loopback HTTP is accepted. */
+export function localOrigin(base) {
+  let url;
+  try { url = new URL(base); } catch { throw new Error(`Bridge endpoint is not a valid URL: ${base}`); }
   if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || url.protocol !== 'http:')
     throw new Error('Bridge endpoint must be local HTTP');
+  return url;
+}
+
+export async function request(base, path, options = {}) {
+  const url = localOrigin(base);
+  const target = new URL(path, url);
+  if (target.origin !== url.origin) throw new Error('Bridge request path must stay on the selected endpoint');
   const { body, signal, ...rest } = options;
-  const response = await fetch(new URL(path, url), {
-    ...rest, headers: { 'content-type': 'application/json', ...rest.headers },
+  // Never follow redirects: a redirected POST would carry the script to another endpoint.
+  const response = await fetch(target, {
+    ...rest, redirect: 'error', headers: { 'content-type': 'application/json', ...rest.headers },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000),
   });
@@ -61,73 +79,152 @@ export function submitRender(base, { output, scene, ...options } = {}) {
 }
 
 export async function wait(base, id, { timeout = 60, signal, onProgress } = {}) {
+  if (typeof timeout !== 'number' || !Number.isFinite(timeout) || timeout < 0) throw new Error('Wait timeout must be a non-negative number of seconds');
   const deadline = Date.now() + timeout * 1000;
   while (true) {
     signal?.throwIfAborted();
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw Object.assign(new Error(`Wait expired; job ${id} may still run. Query status; do not resubmit.`), { id, unknown: true });
-    const budget = AbortSignal.timeout(Math.max(1, Math.min(5000, remaining)));
+    const budget = AbortSignal.timeout(Math.max(1, Math.ceil(Math.min(5000, remaining))));
     let current;
     try {
       current = await request(base, `/api/jobs/${encodeURIComponent(id)}`, { signal: signal ? AbortSignal.any([signal, budget]) : budget });
     } catch (error) {
       throw Object.assign(new Error(`Cannot resolve job ${id}: ${error.message}. Inspect status/session and scene; do not resubmit.`), { id, unknown: true, status: error.status, cause: error });
     }
+    checkJob(current, id);
     onProgress?.(current);
     if (terminal.has(current.status)) return current;
     await new Promise(done => setTimeout(done, Math.min(150, remaining)));
   }
 }
 
+export const VERSION = '0.4.1';
+
+const HELP = `Blender Bridge ${VERSION} (Node 22+, loopback only)
+  blender-bridge list | --version
+  blender-bridge health [target]
+  blender-bridge exec --file <script.py | -> [target] [job options]
+  blender-bridge screenshot --output <new absolute.png> [target] [job options]
+  blender-bridge render [--output <new absolute.png>] [--scene <name>] [target] [job options]
+  blender-bridge status|cancel <id> [target]
+  blender-bridge wait <id> [target] [--timeout <s>]
+Target:  --pid <PID> | --url <loopback URL>   (or BLENDER_BRIDGE_URL)
+Job options:
+  --id <id>          Stable job ID, 1..100 of A-Z a-z 0-9 _ - (otherwise generated)
+  --interval <s>     Pause after each yield for redraw, 0.05..10 (default 0.2)
+  --ttl <s>          Queue lifetime before execution starts, 1..3600 (default 30)
+  --timeout <s>      Client wait budget, 1..3600 (default 60); not cancellation
+  --no-wait          Submit and return the queued job immediately
+--file - reads the script from standard input (UTF-8).
+Exit codes: 0 succeeded/accepted, 1 failed/rejected, 2 outcome unknown (query the same ID; never resubmit).
+Render succeeds only after completion; cancel a running native render in Blender's Render UI.`;
+
+const TARGET = ['url', 'pid'];
+const JOB = ['id', 'interval', 'ttl', 'timeout', 'no-wait'];
+const COMMANDS = {
+  list: { options: [] },
+  health: { options: TARGET },
+  status: { options: TARGET, id: true },
+  cancel: { options: TARGET, id: true },
+  wait: { options: [...TARGET, 'timeout'], id: true },
+  exec: { options: [...TARGET, 'file', ...JOB], required: ['file'] },
+  screenshot: { options: [...TARGET, 'output', ...JOB], required: ['output'] },
+  render: { options: [...TARGET, 'output', 'scene', ...JOB] },
+};
+const FLAGS = new Set(['no-wait']);
+const NUMBERS = { pid: [1, 2 ** 31, true], interval: [0.05, 10], ttl: [1, 3600], timeout: [1, 3600] };
+const DEFAULTS = { interval: 0.2, ttl: 30, timeout: 60 };
+const JOB_ID = /^[A-Za-z0-9_-]{1,100}$/;
+const REJECTED = new Set([400, 401, 403, 404, 409, 413, 503]);
+
+/** Strict CLI parsing: unknown, duplicate, missing or out-of-range options are errors, never ignored. */
+export function parseArgs(command, args = []) {
+  if (command === '--version' || command === 'version') return { opts: { version: true }, positional: [] };
+  if (!command || command === 'help' || command === '--help' || args.includes('--help')) return { opts: { help: true }, positional: [] };
+  const spec = COMMANDS[command];
+  if (!spec) throw new Error(`Unknown command: ${command}. Use --help.`);
+  const opts = {}, positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg.startsWith('--')) { positional.push(arg); continue; }
+    const key = arg.slice(2);
+    if (!spec.options.includes(key)) throw new Error(`Option ${arg} is not valid for ${command}.`);
+    if (Object.hasOwn(opts, key)) throw new Error(`Duplicate option ${arg}.`);
+    if (FLAGS.has(key)) { opts[key] = true; continue; }
+    const value = args[++i];
+    if (value === undefined || value.startsWith('--') || !value.trim()) throw new Error(`Option ${arg} needs a value.`);
+    opts[key] = value;
+  }
+  for (const key of spec.required || []) if (opts[key] === undefined) throw new Error(`${command} requires --${key}.`);
+  if (positional.length !== (spec.id ? 1 : 0)) throw new Error(spec.id ? `${command} needs exactly one job ID.` : `Unexpected argument: ${positional[0]}.`);
+  for (const id of [opts.id, positional[0]]) if (id !== undefined && !JOB_ID.test(id)) throw new Error(`Invalid job ID: ${id}.`);
+  for (const [key, [min, max, integer]] of Object.entries(NUMBERS)) {
+    if (opts[key] === undefined) { if (key in DEFAULTS) opts[key] = DEFAULTS[key]; continue; }
+    const value = Number(opts[key]);
+    if (!Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value)))
+      throw new Error(`--${key} must be ${integer ? 'an integer ' : ''}between ${min} and ${max}.`);
+    opts[key] = value;
+  }
+  if (opts.url && opts.pid) throw new Error('Use either --url or --pid, not both.');
+  return { opts, positional };
+}
+
+async function readStdin() {
+  if (process.stdin.isTTY) throw new Error('--file - expects the script on standard input.');
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8').replace(/^﻿/, '');
+}
+
 async function main(argv) {
   const [command, ...args] = argv;
-  const opts = {};
-  const positional = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith('--')) {
-      const key = args[i].slice(2);
-      opts[key] = ['no-wait'].includes(key) ? true : args[++i];
-    } else positional.push(args[i]);
-  }
-  if (!command || command === 'help') {
-    console.log('Blender Bridge: list | health | exec --file script.py [--id ID --interval 0.2 --ttl 30 --timeout 60 --no-wait] | status ID | wait ID | cancel ID | screenshot --output new.png | render [--output new.png --scene NAME --no-wait]. Target with --url URL or --pid PID. Render succeeds only after completion; cancel native renders in Blender.');
-    return;
-  }
+  const { opts, positional } = parseArgs(command, args);
+  if (opts.help) { console.log(HELP); return; }
+  if (opts.version) { console.log(VERSION); return; }
   if (command === 'list') { console.log(JSON.stringify(await discover(), null, 2)); return; }
-  let base = opts.url || process.env.BLENDER_BRIDGE_URL;
+  let base = opts.url || (!opts.pid && process.env.BLENDER_BRIDGE_URL);
   if (!base) {
-    const instances = (await discover()).filter(item => !opts.pid || item.pid === Number(opts.pid));
+    const instances = (await discover()).filter(item => !opts.pid || item.pid === opts.pid);
     if (instances.length !== 1) throw new Error(`Expected one Blender; found ${instances.length}. Use list and --pid/--url.`);
     base = instances[0].url;
   }
+  localOrigin(base); // A bad endpoint is rejected before any job ID is issued or anything is sent.
   let result;
   if (command === 'health') result = await request(base, '/api/health');
   else if (['status', 'wait', 'cancel'].includes(command)) {
-    if (!positional[0]) throw new Error('Job ID required');
-    result = command === 'wait' ? await wait(base, positional[0], { timeout: Number(opts.timeout || 60) })
-      : await request(base, `/api/jobs/${encodeURIComponent(positional[0])}${command === 'cancel' ? '/cancel' : ''}`,
-          command === 'cancel' ? { method: 'POST', body: {} } : {});
-  } else if (command === 'exec' || command === 'screenshot' || command === 'render') {
-    let code;
-    if (command === 'screenshot') {
-      if (!opts.output) throw new Error('--output is required');
-      code = screenshotCode(resolve(opts.output));
-    } else if (command === 'render') {
-      code = renderCode(opts.output ? resolve(opts.output) : undefined, opts.scene);
-    } else {
-      if (!opts.file) throw new Error('--file is required');
-      code = await readFile(opts.file, 'utf8');
+    const [id] = positional;
+    if (command === 'wait') result = await wait(base, id, { timeout: opts.timeout });
+    else {
+      try {
+        result = checkJob(await request(base, `/api/jobs/${encodeURIComponent(id)}${command === 'cancel' ? '/cancel' : ''}`,
+          command === 'cancel' ? { method: 'POST', body: {} } : {}), id);
+      } catch (error) {
+        // 409 (cancel refused for a running native render) is a definite answer about the request.
+        // A lost reply, an invalid one or 404 (unknown/evicted record) says nothing about whether the job ran.
+        if (error.status === 409 || error.status === 400) throw error;
+        if (error.status === 404) throw Object.assign(new Error(`Job ${id} is unknown or evicted (${error.message}). Whether it ran cannot be determined; inspect the scene and health.session before retrying.`), { unknown: true });
+        if (error.unknown) throw error;
+        throw Object.assign(new Error(`Cannot resolve job ${id}: ${error.message}. Its outcome is unknown; query again before retrying.`), { unknown: true });
+      }
     }
+  } else {
+    let code;
+    if (command === 'screenshot') code = screenshotCode(resolve(opts.output));
+    else if (command === 'render') code = renderCode(opts.output ? resolve(opts.output) : undefined, opts.scene);
+    else code = opts.file === '-' ? await readStdin() : await readFile(opts.file, 'utf8');
+    if (command === 'exec' && !code.trim()) throw new Error('Script is empty.');
     const id = opts.id || randomUUID();
     console.error(JSON.stringify({ id, url: base, note: 'Timeout is not cancellation; query this ID before retrying.' }));
     try {
-      result = await submit(base, code, { id, interval: Number(opts.interval || 0.2), ttl: Number(opts.ttl || 30) });
+      result = checkJob(await submit(base, code, { id, interval: opts.interval, ttl: opts.ttl }), id);
     } catch (error) {
-      if (!error.status) throw Object.assign(new Error(`Submission outcome unknown for ${id}: ${error.message}. Query this ID and inspect the scene; do not resubmit.`), { unknown: true });
-      throw error;
+      // Only explicit refusals prove nothing ran: bad request, refused origin/host, missing route, ID conflict, oversized body, capacity/stopped.
+      if (REJECTED.has(error.status)) throw error;
+      throw Object.assign(new Error(`Submission outcome unknown for ${id}: ${error.message}. Query this ID and inspect the scene; do not resubmit.`), { unknown: true });
     }
-    if (!opts['no-wait']) result = await wait(base, id, { timeout: Number(opts.timeout || 60) });
-  } else throw new Error(`Unknown command: ${command}`);
+    if (!opts['no-wait']) result = await wait(base, id, { timeout: opts.timeout });
+  }
   console.log(JSON.stringify(result, null, 2));
   if (result.status && terminal.has(result.status) && result.status !== 'succeeded') process.exitCode = 1;
 }

@@ -1,0 +1,13 @@
+{
+  "name": "blender-bridge-tools",
+  "owner": { "name": "RetMnit" },
+  "description": "Blender Bridge: drive a running Blender from local agents.",
+  "plugins": [
+    {
+      "name": "blender-bridge",
+      "source": "./plugins/blender-bridge",
+      "description": "Control a running Blender through the shared local Blender Bridge.",
+      "category": "development"
+    }
+  ]
+}

@@ -1,4 +1,8 @@
-# 0.4.0 validation
+# 0.4.1 validation
+
+Client/plugin-only release on Windows / Blender 5.2.0 LTS (addon 0.4.0, isolated factory-startup GUI) / Node 22: all 25 Node tests passed, covering strict option parsing, stdin with a BOM and non-ASCII text, fractional wait budgets, mismatched or malformed job replies, HTTP status classification, refused redirects and off-endpoint paths, bad endpoints rejected before an ID is issued, manifest consistency, and the DSH adapter reporting an invalid poll as unknown. Against the real instance the new client ran visible generator steps from stdin, a validated screenshot, tracked renders (PNG viewed, `--no-wait` then `wait`), and `tests/smoke.mjs` passed. A PowerShell 5.1 here-string kept Chinese text intact once `$OutputEncoding` was UTF-8. `claude plugin validate` passed. Codex and DSH reviewed the change; their findings are included.
+
+## 0.4.0 validation
 
 Windows / Blender 5.2.0 LTS / Node 22, isolated GUI instances:
 

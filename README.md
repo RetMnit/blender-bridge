@@ -1,6 +1,6 @@
 # Blender Bridge
 
-Shared local Blender executor for Codex, DSH and other agents. Blender 3.6+ (tested with 5.2.0 LTS), Python standard library only; clients use Node 22+. Originally based on DSH Blender Bridge 0.1.0.
+Shared local Blender executor for Codex, Claude Code, DSH and other agents. Blender 3.6+ (tested with 5.2.0 LTS), Python standard library only; clients use Node 22+. Originally based on DSH Blender Bridge 0.1.0.
 
 ## Install
 
@@ -34,7 +34,7 @@ Each yield lets Blender process input and redraw all areas before the next step 
 ## Codex
 
 ```text
-codex plugin marketplace add https://github.com/RetMnit/blender-bridge.git --ref v0.4.0
+codex plugin marketplace add https://github.com/RetMnit/blender-bridge.git --ref v0.4.1
 codex plugin add blender-bridge@blender-bridge-tools
 ```
 
@@ -49,6 +49,21 @@ node <client> screenshot --pid <pid> --output <new-absolute.png>
 ```
 
 Screenshots require addon 0.3.0+ and a GUI. On Windows a minimized target window is temporarily restored for two redraw ticks, then minimized again (also on cancellation or failure). Capture targets this Blender process only; ambiguous windows fail rather than guessing. The largest Blender window is selected. The scene, layout and saved files are unchanged. RGB pixels are checked before publishing: a black capture fails without creating the requested output. Existing files are never overwritten. View the returned PNG to verify the intended scene.
+
+## Claude Code
+
+The same plugin folder carries a Claude Code manifest (`.claude-plugin/marketplace.json` at the repository root and `plugins/blender-bridge/.claude-plugin/plugin.json`), sharing the Skill and CLI with Codex:
+
+```text
+claude plugin marketplace add https://github.com/RetMnit/blender-bridge.git#v0.4.1
+claude plugin install blender-bridge@blender-bridge-tools
+```
+
+To upgrade, run `claude plugin marketplace remove blender-bridge-tools` and repeat both commands with the new tag; new sessions load the updated Skill. Claude runs the CLI with its own shell tool; no MCP server is involved.
+
+Scripts can come from standard input with `exec --file -`: in Bash use a quoted heredoc (`<<'EOF'`); in Windows PowerShell 5.1 set `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` and pipe a single-quoted here-string, otherwise non-ASCII text becomes `?` before the client receives it. Screenshot and render outputs are written by Blender, so choose a folder Blender can see: an app packaged as MSIX on Windows (such as the Claude desktop app) has its writes under `%LOCALAPPDATA%`/`%TEMP%` redirected to a private copy.
+
+Release 0.4.1 changes only the clients, plugins and documentation; the addon is unchanged (it still reports 0.4.0) and need not be reinstalled.
 
 ## DSH
 

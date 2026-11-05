@@ -130,7 +130,8 @@ async function waitTracked(base, id, { timeoutSeconds, signal }) {
     return { job, timedOut: false };
   } catch (error) {
     const aborted = signal?.aborted === true || error?.name === 'AbortError';
-    const queryFailed = typeof error?.status === 'number';
+    // A failed or invalid poll (HTTP status, transport cause, or a reply for the wrong job) is not a wait timeout.
+    const queryFailed = typeof error?.status === 'number' || error?.invalidResponse === true || error?.cause !== undefined;
     if (last && !aborted && !queryFailed) return { job: last, timedOut: true };
     throw error;
   }

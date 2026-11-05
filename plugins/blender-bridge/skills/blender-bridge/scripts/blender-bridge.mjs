@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, isAbsolute, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { Journal, summarize, budget } from './journal.mjs';
 
 export const terminal = new Set(['succeeded', 'failed', 'cancelled', 'expired', 'interrupted']);
 const states = new Set(['queued', 'running', ...terminal]);
@@ -99,7 +100,7 @@ export async function wait(base, id, { timeout = 60, signal, onProgress } = {}) 
   }
 }
 
-export const VERSION = '0.4.1';
+export const VERSION = '0.4.2';
 
 const HELP = `Blender Bridge ${VERSION} (Node 22+, loopback only)
   blender-bridge list | --version
@@ -109,6 +110,7 @@ const HELP = `Blender Bridge ${VERSION} (Node 22+, loopback only)
   blender-bridge render [--output <new absolute.png>] [--scene <name>] [target] [job options]
   blender-bridge status|cancel <id> [target]
   blender-bridge wait <id> [target] [--timeout <s>]
+  blender-bridge recent [--limit <n>] [--pid <PID>]
 Target:  --pid <PID> | --url <loopback URL>   (or BLENDER_BRIDGE_URL)
 Job options:
   --id <id>          Stable job ID, 1..100 of A-Z a-z 0-9 _ - (otherwise generated)
@@ -116,24 +118,29 @@ Job options:
   --ttl <s>          Queue lifetime before execution starts, 1..3600 (default 30)
   --timeout <s>      Client wait budget, 1..3600 (default 60); not cancellation
   --no-wait          Submit and return the queued job immediately
+  --max-chars <n>    Shorten printed result/error/progress/logs to about n chars, 200..1000000
+exec, screenshot and render jobs are recorded in ~/.blender-bridge/jobs.jsonl (or BLENDER_BRIDGE_JOURNAL)
+with their endpoint and Blender session: "recent" lists them without contacting Blender, and
+status/wait/cancel reuse the recorded endpoint when no target is given, refusing a restarted session.
 --file - reads the script from standard input (UTF-8).
 Exit codes: 0 succeeded/accepted, 1 failed/rejected, 2 outcome unknown (query the same ID; never resubmit).
 Render succeeds only after completion; cancel a running native render in Blender's Render UI.`;
 
 const TARGET = ['url', 'pid'];
-const JOB = ['id', 'interval', 'ttl', 'timeout', 'no-wait'];
+const JOB = ['id', 'interval', 'ttl', 'timeout', 'no-wait', 'max-chars'];
 const COMMANDS = {
   list: { options: [] },
   health: { options: TARGET },
-  status: { options: TARGET, id: true },
-  cancel: { options: TARGET, id: true },
-  wait: { options: [...TARGET, 'timeout'], id: true },
+  recent: { options: ['pid', 'limit'] },
+  status: { options: [...TARGET, 'max-chars'], id: true },
+  cancel: { options: [...TARGET, 'max-chars'], id: true },
+  wait: { options: [...TARGET, 'timeout', 'max-chars'], id: true },
   exec: { options: [...TARGET, 'file', ...JOB], required: ['file'] },
   screenshot: { options: [...TARGET, 'output', ...JOB], required: ['output'] },
   render: { options: [...TARGET, 'output', 'scene', ...JOB] },
 };
 const FLAGS = new Set(['no-wait']);
-const NUMBERS = { pid: [1, 2 ** 31, true], interval: [0.05, 10], ttl: [1, 3600], timeout: [1, 3600] };
+const NUMBERS = { pid: [1, 2 ** 31, true], interval: [0.05, 10], ttl: [1, 3600], timeout: [1, 3600], limit: [1, 1000, true], 'max-chars': [200, 1000000, true] };
 const DEFAULTS = { interval: 0.2, ttl: 30, timeout: 60 };
 const JOB_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const REJECTED = new Set([400, 401, 403, 404, 409, 413, 503]);
@@ -178,54 +185,106 @@ async function readStdin() {
 }
 
 async function main(argv) {
+  if (typeof AbortSignal.any !== 'function') throw new Error(`Blender Bridge CLI needs Node 22+ (found ${process.version}).`);
   const [command, ...args] = argv;
   const { opts, positional } = parseArgs(command, args);
   if (opts.help) { console.log(HELP); return; }
   if (opts.version) { console.log(VERSION); return; }
   if (command === 'list') { console.log(JSON.stringify(await discover(), null, 2)); return; }
+  const journal = Journal.forTool('blender-bridge', 'BLENDER_BRIDGE_JOURNAL');
+  const warned = new Set();
+  const warn = message => { if (message && !warned.has(message)) { warned.add(message); console.error(JSON.stringify({ warning: message })); } };
+  if (command === 'recent') {
+    const all = await journal.jobs().catch(error => { warn(`Job journal ${journal.file} could not be read (${error.message}).`); return []; });
+    const jobs = all.filter(job => !opts.pid || job.pid === opts.pid);
+    console.log(JSON.stringify({ journal: journal.file, jobs: jobs.slice(0, opts.limit ?? 20), hint: 'Recorded locally, not live: query an ID with status or wait before acting on it. Blender keeps job records in memory only, so a restarted session no longer knows them.' }, null, 2));
+    return;
+  }
+  const [queried] = positional;
+  const explicit = Boolean(opts.url || opts.pid);
+  let unreadable;
+  const known = queried ? await journal.find(queried).catch(error => { unreadable = error; return undefined; }) : undefined;
   let base = opts.url || (!opts.pid && process.env.BLENDER_BRIDGE_URL);
+  if (!base && !explicit && queried) {
+    if (unreadable) throw new Error(`Job journal ${journal.file} could not be read (${unreadable.message}). Pass --pid or --url for job ${queried}.`);
+    if (known?.url) base = known.url; // Recover the endpoint this job was submitted to, so the caller need not remember it.
+  }
   if (!base) {
     const instances = (await discover()).filter(item => !opts.pid || item.pid === opts.pid);
-    if (instances.length !== 1) throw new Error(`Expected one Blender; found ${instances.length}. Use list and --pid/--url.`);
+    if (!instances.length) throw new Error(`No running Blender with the Blender Bridge addon was found${opts.pid ? ` for PID ${opts.pid}` : ''} (descriptors in ${join(tmpdir(), 'blender-bridge')}). Open Blender with the addon enabled, or pass --url.`);
+    if (instances.length > 1) throw new Error(`Expected one Blender; found ${instances.length}. Use list and --pid/--url.`);
     base = instances[0].url;
   }
   localOrigin(base); // A bad endpoint is rejected before any job ID is issued or anything is sent.
-  let result;
-  if (command === 'health') result = await request(base, '/api/health');
-  else if (['status', 'wait', 'cancel'].includes(command)) {
-    const [id] = positional;
-    if (command === 'wait') result = await wait(base, id, { timeout: opts.timeout });
+  // Where a state update is recorded: a new submission, or a recorded job whose session was just verified.
+  let scope;
+  if (known?.session) {
+    // Blender keeps job records in memory, so an answer only counts for the recorded session.
+    let health;
+    try { health = await request(base, '/api/health'); }
+    catch (error) { throw Object.assign(new Error(`Cannot reach Blender at ${base} for job ${queried}: ${error.message}. Its outcome is unknown; inspect the scene before retrying.`), { unknown: true }); }
+    if (health.session === known.session) scope = { url: known.url, pid: known.pid, session: known.session };
     else {
-      try {
-        result = checkJob(await request(base, `/api/jobs/${encodeURIComponent(id)}${command === 'cancel' ? '/cancel' : ''}`,
-          command === 'cancel' ? { method: 'POST', body: {} } : {}), id);
-      } catch (error) {
-        // 409 (cancel refused for a running native render) is a definite answer about the request.
-        // A lost reply, an invalid one or 404 (unknown/evicted record) says nothing about whether the job ran.
-        if (error.status === 409 || error.status === 400) throw error;
-        if (error.status === 404) throw Object.assign(new Error(`Job ${id} is unknown or evicted (${error.message}). Whether it ran cannot be determined; inspect the scene and health.session before retrying.`), { unknown: true });
-        if (error.unknown) throw error;
-        throw Object.assign(new Error(`Cannot resolve job ${id}: ${error.message}. Its outcome is unknown; query again before retrying.`), { unknown: true });
-      }
+      const message = `Blender at ${base} is not the session job ${queried} was recorded in (recorded ${known.session}, now ${health.session}).`;
+      if (!explicit) throw Object.assign(new Error(`${message} Blender was restarted or another instance took the port; its job records are gone, so inspect the scene before retrying.`), { unknown: true });
+      warn(`${message} Its answer is about that session, not the recorded job, and is not recorded.`);
     }
-  } else {
-    let code;
-    if (command === 'screenshot') code = screenshotCode(resolve(opts.output));
-    else if (command === 'render') code = renderCode(opts.output ? resolve(opts.output) : undefined, opts.scene);
-    else code = opts.file === '-' ? await readStdin() : await readFile(opts.file, 'utf8');
-    if (command === 'exec' && !code.trim()) throw new Error('Script is empty.');
-    const id = opts.id || randomUUID();
-    console.error(JSON.stringify({ id, url: base, note: 'Timeout is not cancellation; query this ID before retrying.' }));
-    try {
-      result = checkJob(await submit(base, code, { id, interval: opts.interval, ttl: opts.ttl }), id);
-    } catch (error) {
-      // Only explicit refusals prove nothing ran: bad request, refused origin/host, missing route, ID conflict, oversized body, capacity/stopped.
-      if (REJECTED.has(error.status)) throw error;
-      throw Object.assign(new Error(`Submission outcome unknown for ${id}: ${error.message}. Query this ID and inspect the scene; do not resubmit.`), { unknown: true });
-    }
-    if (!opts['no-wait']) result = await wait(base, id, { timeout: opts.timeout });
   }
-  console.log(JSON.stringify(result, null, 2));
+  let result, submitted;
+  try {
+    if (command === 'health') result = await request(base, '/api/health');
+    else if (['status', 'wait', 'cancel'].includes(command)) {
+      if (command === 'wait') result = await wait(base, queried, { timeout: opts.timeout });
+      else {
+        try {
+          result = checkJob(await request(base, `/api/jobs/${encodeURIComponent(queried)}${command === 'cancel' ? '/cancel' : ''}`,
+            command === 'cancel' ? { method: 'POST', body: {} } : {}), queried);
+        } catch (error) {
+          // 409 (cancel refused for a running native render) is a definite answer about the request.
+          // A lost reply, an invalid one or 404 (unknown/evicted record) says nothing about whether the job ran.
+          if (error.status === 409 || error.status === 400) throw error;
+          if (error.status === 404) throw Object.assign(new Error(`Job ${queried} is unknown or evicted (${error.message}). Whether it ran cannot be determined; inspect the scene and health.session before retrying.`), { unknown: true });
+          if (error.unknown) throw error;
+          throw Object.assign(new Error(`Cannot resolve job ${queried}: ${error.message}. Its outcome is unknown; query again before retrying.`), { unknown: true });
+        }
+      }
+    } else {
+      let code;
+      if (command === 'screenshot') code = screenshotCode(resolve(opts.output));
+      else if (command === 'render') code = renderCode(opts.output ? resolve(opts.output) : undefined, opts.scene);
+      else code = opts.file === '-' ? await readStdin() : await readFile(opts.file, 'utf8');
+      if (command === 'exec' && !code.trim()) throw new Error('Script is empty.');
+      // Health first: it proves the endpoint answers before an ID is issued, and names the session to record.
+      const health = await request(base, '/api/health');
+      const id = opts.id || randomUUID();
+      console.error(JSON.stringify({ id, url: base, note: 'Timeout is not cancellation; query this ID before retrying.' }));
+      const target = { id, url: base, pid: health.pid, session: health.session };
+      // A reused ID already recorded for this session is the same job (deduplicated or a conflict): keep its record.
+      if (await journal.has(target).catch(() => false)) scope = { url: base, pid: health.pid, session: health.session };
+      else {
+        submitted = id;
+        scope = { url: base, pid: health.pid, session: health.session };
+        warn(await journal.note({ event: 'submitted', ...target, operation: command, state: 'unknown',
+          summary: command === 'exec' ? summarize(code) : command === 'render' ? `render ${opts.scene ?? ''}`.trim() : command }));
+      }
+      try {
+        result = checkJob(await submit(base, code, { id, interval: opts.interval, ttl: opts.ttl }), id);
+      } catch (error) {
+        // Only explicit refusals prove nothing ran: bad request, refused origin/host, missing route, ID conflict, oversized body, capacity/stopped.
+        if (REJECTED.has(error.status)) throw Object.assign(error, { rejected: true });
+        throw Object.assign(new Error(`Submission outcome unknown for ${id}: ${error.message}. Query this ID and inspect the scene; do not resubmit.`), { unknown: true });
+      }
+      if (!opts['no-wait']) result = await wait(base, id, { timeout: opts.timeout });
+    }
+  } catch (error) {
+    // A failed submission is recorded; a failed query leaves the last known state alone.
+    if (submitted) warn(await journal.note({ event: 'state', id: submitted, state: error.unknown ? 'unknown' : 'rejected', ...scope }));
+    if (opts['max-chars'] && error.message.length > opts['max-chars']) error.message = budget({ error: error.message }, opts['max-chars']).error;
+    throw error;
+  }
+  const recordedId = submitted || (scope && (queried || result?.id));
+  if (recordedId && result.id === recordedId) warn(await journal.note({ event: 'state', id: recordedId, state: result.status, ...scope }));
+  console.log(JSON.stringify(budget(result, opts['max-chars']), null, 2));
   if (result.status && terminal.has(result.status) && result.status !== 'succeeded') process.exitCode = 1;
 }
 

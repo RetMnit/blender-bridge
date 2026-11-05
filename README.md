@@ -34,7 +34,7 @@ Each yield lets Blender process input and redraw all areas before the next step 
 ## Codex
 
 ```text
-codex plugin marketplace add https://github.com/RetMnit/blender-bridge.git --ref v0.4.1
+codex plugin marketplace add https://github.com/RetMnit/blender-bridge.git --ref v0.4.2
 codex plugin add blender-bridge@blender-bridge-tools
 ```
 
@@ -55,7 +55,7 @@ Screenshots require addon 0.3.0+ and a GUI. On Windows a minimized target window
 The same plugin folder carries a Claude Code manifest (`.claude-plugin/marketplace.json` at the repository root and `plugins/blender-bridge/.claude-plugin/plugin.json`), sharing the Skill and CLI with Codex:
 
 ```text
-claude plugin marketplace add https://github.com/RetMnit/blender-bridge.git#v0.4.1
+claude plugin marketplace add https://github.com/RetMnit/blender-bridge.git#v0.4.2
 claude plugin install blender-bridge@blender-bridge-tools
 ```
 
@@ -63,7 +63,7 @@ To upgrade, run `claude plugin marketplace remove blender-bridge-tools` and repe
 
 Scripts can come from standard input with `exec --file -`: in Bash use a quoted heredoc (`<<'EOF'`); in Windows PowerShell 5.1 set `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` and pipe a single-quoted here-string, otherwise non-ASCII text becomes `?` before the client receives it. Screenshot and render outputs are written by Blender, so choose a folder Blender can see: an app packaged as MSIX on Windows (such as the Claude desktop app) has its writes under `%LOCALAPPDATA%`/`%TEMP%` redirected to a private copy.
 
-Release 0.4.1 changes only the clients, plugins and documentation; the addon is unchanged (it still reports 0.4.0) and need not be reinstalled.
+Releases 0.4.1 and 0.4.2 change only the clients, plugins and documentation; the addon is unchanged (it still reports 0.4.0) and need not be reinstalled.
 
 ## DSH
 
@@ -86,6 +86,17 @@ Omit output to keep only Blender's Render Result; use `--scene <name>` to select
 A client timeout is not cancellation. Query the same ID. A queued render can be cancelled, but cancelling an already running render through the bridge returns 409 and continues tracking it. Use Escape in Blender's actual Render UI to cancel, then query the original job until it reports cancelled. Bridge Stop detaches monitoring and reports interrupted; it cannot forcibly stop Blender's native renderer. Normal exec that only calls INVOKE_DEFAULT still means "render started" and should not replace this command.
 
 See [protocol](docs/protocol.md). Return values are display strings; print output is captured. Scripts have `bpy`, `C`, `D`, `context`, `mathutils`. Changes are not automatically undone or saved. A timeout/disconnect is not cancellation: query the printed job ID and original endpoint/session before retrying. IDs and results are held in memory (up to 128); restarting Blender does not replay work. A running generator can be cancelled between steps; prior mutations remain. Never expose this arbitrary Python executor outside loopback; untrusted browser Origin requests are rejected.
+
+### CLI job journal (0.4.2+)
+
+- Before submitting `exec`, `screenshot` or `render`, the CLI appends the job ID, endpoint, Blender PID and session, and the script's first line to `~/.blender-bridge/jobs.jsonl`, then appends each state it sees. `BLENDER_BRIDGE_JOURNAL` sets another file; `off` disables recording (the summary stores a script's first line).
+- Recording is best effort: if the journal cannot be written, stderr carries one `{"warning": ...}` line and the command still runs, so the printed ID may be the only handle. Judge the command by stdout and the exit code, not by stderr being non-empty.
+- `recent [--limit n] [--pid <PID>]` lists recorded jobs, newest first, without contacting Blender. States are the last ones this machine saw.
+- `status|wait|cancel <id>` without a target reuses the recorded endpoint. Whenever the job's session is recorded, the CLI compares it with the live Blender: an implicit target (journal or `BLENDER_BRIDGE_URL`) in another session exits 2, because Blender's in-memory job records did not survive the restart; an explicit `--url`/`--pid` answers with a warning and does not touch the record. An unreadable journal asks for an explicit target. A reused ID in the same session is the same job: a refused resubmission or a failed query never rewrites its record.
+- Concurrent CLI processes serialise appends and compaction through a lock file. Past 1 MiB the journal is compacted to one complete snapshot per job, keeping the newest 2000 or 512 KiB.
+- `--max-chars <n>` shortens each printed text field and the logs (newest lines first; an oversized line keeps its end) and reports what was cut in `truncated`; Blender's record is unaffected.
+- Job submissions query health first, so an endpoint that does not answer is rejected before an ID is issued. The CLI needs Node 22+ and says so when started on older Node.
+- The DSH adapter keeps its own job handling; it does not read or write this journal.
 
 ## Validate
 

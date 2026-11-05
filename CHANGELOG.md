@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2 — 2026-11-05
+- Client and plugin release; the addon and protocol 2 are unchanged (the addon still reports 0.4.0).
+- The CLI records `exec`, `screenshot` and `render` jobs with their endpoint, PID, session and the script's first line in `~/.blender-bridge/jobs.jsonl` (`BLENDER_BRIDGE_JOURNAL` sets the file, `off` disables it). Recording is best effort: an unwritable journal produces one stderr warning and never blocks the command. A job is its ID within one session, so reused IDs in other sessions stay separate.
+- Appends and compaction share a lock file, so concurrent CLI processes do not lose entries. Past 1 MiB the journal is compacted to one complete snapshot per job (newest 2000 or 512 KiB), keeping each job's endpoint and session.
+- New `recent [--limit] [--pid]` lists recorded jobs offline. `status|wait|cancel <id>` without a target reuses the recorded endpoint. The recorded session is checked whenever it is known: an implicit target (journal or `BLENDER_BRIDGE_URL`) in another session exits 2 because Blender's in-memory job records are gone; an explicit `--url`/`--pid` answers with a warning and leaves the record alone. An unreadable journal asks for an explicit target. A refused resubmission of a recorded ID or a failed query never overwrites the recorded job.
+- Job submissions first query health, so an endpoint that does not answer is rejected before a job ID is issued.
+- New `--max-chars <n>` shortens each printed text field, the logs (newest lines; an oversized line keeps its end) and error messages; the default output is unchanged.
+- The CLI checks for Node 22+ at start and explains when no Blender instance is running.
+
 ## 0.4.1 — 2026-11-05
 - Client and plugin release; the addon and protocol 2 are unchanged (the addon still reports 0.4.0, and Blender does not need reinstalling).
 - Claude Code plugin: `.claude-plugin/marketplace.json` at the repository root and `plugins/blender-bridge/.claude-plugin/plugin.json` reuse the same Skill and CLI as Codex.

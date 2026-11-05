@@ -1,6 +1,6 @@
 {
   "name": "blender-bridge",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Control Blender through a shared local bridge, with visible generator steps and recoverable job status.",
   "author": { "name": "RetMnit" },
   "homepage": "https://github.com/RetMnit/blender-bridge",

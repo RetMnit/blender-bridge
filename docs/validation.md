@@ -1,4 +1,8 @@
-# 0.4.1 validation
+# 0.4.2 validation
+
+Client/plugin-only release on Windows / Blender 5.2.0 LTS (addon 0.4.0, isolated factory-startup GUI) / Node 22: all 42 Node tests passed, adding journal coverage (merge per ID and session, compaction, concurrency and locks, `off`), `recent`, recovery through the recorded endpoint, session checks for journal, `BLENDER_BRIDGE_URL` and explicit targets, refused ID reuse, unreadable journals and `--max-chars` on results, logs and errors. Against the real instance: visible steps and a render were journaled with PID and session, `wait` without a target completed the render, `--max-chars` shortened a 1000-character result and long log lines, and a reused ID with a different script was refused without touching the record. After a real restart of Blender, `status` of an old job without a target exited 2 naming both sessions; with an explicit `--pid` it warned, got 404 and left the record unchanged. `tests/smoke.mjs` passed. Codex and DSH reviewed the change; their findings are included.
+
+## 0.4.1 validation
 
 Client/plugin-only release on Windows / Blender 5.2.0 LTS (addon 0.4.0, isolated factory-startup GUI) / Node 22: all 25 Node tests passed, covering strict option parsing, stdin with a BOM and non-ASCII text, fractional wait budgets, mismatched or malformed job replies, HTTP status classification, refused redirects and off-endpoint paths, bad endpoints rejected before an ID is issued, manifest consistency, and the DSH adapter reporting an invalid poll as unknown. Against the real instance the new client ran visible generator steps from stdin, a validated screenshot, tracked renders (PNG viewed, `--no-wait` then `wait`), and `tests/smoke.mjs` passed. A PowerShell 5.1 here-string kept Chinese text intact once `$OutputEncoding` was UTF-8. `claude plugin validate` passed. Codex and DSH reviewed the change; their findings are included.
 
